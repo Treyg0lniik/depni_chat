@@ -1,4 +1,3 @@
-import asyncio
 from warnings import filters
 from telegram.ext import Application, CommandHandler, filters, MessageHandler
 from config import BOT_TOKEN
@@ -7,12 +6,7 @@ from handlers import admin_broadcast, cmd_give, register_handlers, start, daily,
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
-        # Удаляем все webhooks, чтобы избежать Conflict
-    asyncio.get_event_loop().run_until_complete(
-        app.bot.delete_webhook(drop_pending_updates=True)
-    )
-        
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("daily", daily))
     app.add_handler(CommandHandler("top", top))
