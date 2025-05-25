@@ -21,4 +21,14 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # адрес вашего Render-сервиса: 
+    # например https://depni-chat-bot.onrender.com
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")  
+    WEBHOOK_PATH = f"/{os.getenv('WEBHOOK_SECRET')}"
+    
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000)),
+        url_path=WEBHOOK_PATH,
+        webhook_url=WEBHOOK_URL + WEBHOOK_PATH,
+    )
