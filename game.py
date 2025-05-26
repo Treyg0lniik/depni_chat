@@ -1,13 +1,14 @@
 import secrets
-from telegram import Update
-from telegram.ext import ContextTypes
-from db import get_user, save_user
-from utils import ensure_registered, seconds_until_next_daily, format_timer
 import asyncio
 import random
+from telegram import Update
+from telegram.ext import ContextTypes, MessageHandler, filters
 from telegram.error import RetryAfter
+from db import get_user, save_user
+from utils import ensure_registered, seconds_until_next_daily, format_timer
 
-rooms = {}  # room_code -> room_data
+# Хранение комнат: код -> данные
+rooms = {}  # room_code -> {creator, min_bet, players, msg, active}
 
 async def safe_edit(msg, text):
     try:
@@ -19,161 +20,160 @@ async def safe_edit(msg, text):
         pass
 
 @ensure_registered
-async def create_room(update, context):
+async def create_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /dap <минимальная_ставка>
+    Открывает комнату с любыми депами от участников, 
+    но не ниже указанной суммы.
+    """
     try:
-        amount = int(context.args[0])
+        min_bet = int(context.args[0])
     except:
-        return await update.message.reply_text("Укажи сумму депа: /dap 50")
-
+        return await update.message.reply_text("Укажи сумму минимальной ставки: /dap 50")
+    
     user_id = update.effective_user.id
     user = get_user(user_id)
-    if user["capybaras"] < amount:
-        return await update.message.reply_text("Недостаточно капибар для депа :(")
+    if user["capybaras"] < min_bet:
+        return await update.message.reply_text("Недостаточно капибар для депа.")
 
-    user["capybaras"] -= amount
+    # сразу резервируем у создателя его ставкуминимум
+    user["capybaras"] -= min_bet
     save_user(user_id, user)
 
-    # Генерируем случайный код комнаты
-    room_code = secrets.token_hex(3)  # 6 символов
-    room_msg = await update.message.reply_text(
+    room_code = secrets.token_hex(3)  # например, 'a1b2c3'
+    text = (
         f"🎲 Комната {room_code} открыта!\n"
-        f"Ставка: {amount} капибар\n"
-        f"Участвуй, ответив на это сообщение числом.\n"
+        f"Минимальная ставка: {min_bet} капибар\n"
         f"⏳ Осталось 60 сек.\n"
-        f"Депальщиков: 1 (сумма пула: {amount})"
+        f"🧑‍🤝‍🧑 Участников: 1 (потолок: {min_bet})\n\n"
+        "Чтобы зайти — ответь на это сообщение числом (не меньше минимальной ставки)."
     )
+    room_msg = await update.message.reply_text(text)
 
     rooms[room_code] = {
         "creator": user_id,
-        "bet": amount,
-        "players": {user_id: amount},
+        "min_bet": min_bet,
+        "players": {user_id: min_bet},
         "msg": room_msg,
         "active": True,
     }
     asyncio.create_task(countdown(room_code))
 
-@ensure_registered
-async def join_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Ловит любой текстовый ответ на сообщение комнаты и пытается сделать деп.
+    """
     replied = update.message.reply_to_message
     if not replied:
-        return
-    room = next((r for r in rooms.values() if r["msg"].message_id == replied.message_id and r["active"]), None)
+        return  # не ответ на сообщение
+    # находим комнату по ID сообщения
+    room = next(
+        (r for r in rooms.values() if r["msg"].message_id == replied.message_id and r["active"]),
+        None
+    )
     if not room:
-        return
+        return  # не наша комната или закрыта
+
+    # парсим число из текста
+    try:
+        amount = int(update.message.text.strip())
+    except ValueError:
+        return  # не число — игнорируем
 
     user_id = update.effective_user.id
     user = get_user(user_id)
-    bet = room["bet"]
-
-    if user["capybaras"] < bet:
-        await update.message.reply_text("Недостаточно капибар для депа....")
-        return
-
+    if amount < room["min_bet"]:
+        return await update.message.reply_text(f"Ставка должна быть не меньше {room['min_bet']} капибар.")
+    if user["capybaras"] < amount:
+        return await update.message.reply_text("Недостаточно капибар для этой ставки.")
     if user_id in room["players"]:
-        await update.message.reply_text("Ты уже депнул.")
-        return
+        return await update.message.reply_text("Ты уже участвовал в этой комнате.")
 
-    user["capybaras"] -= bet
+    # списываем и сохраняем
+    user["capybaras"] -= amount
     save_user(user_id, user)
-    room["players"][user_id] = bet
-    await update.message.reply_text("Ура, вы депнули свою зп!")
+    room["players"][user_id] = amount
 
-async def countdown(room_id):
+    # обновляем сообщение комнаты (счётчик участников и сумму пула)
+    total_pool = sum(room["players"].values())
+    await safe_edit(
+        room["msg"],
+        f"🎲 Комната {next(code for code, data in rooms.items() if data is room)}\n"
+        f"Минимальная ставка: {room['min_bet']} капибар\n"
+        f"🧑‍🤝‍🧑 Участников: {len(room['players'])} (пул: {total_pool})\n"
+        f"⏳ Осталось: (таймер идёт)\n\n"
+        "Ответь числом, чтобы присоединиться."
+    )
+    await update.message.reply_text(f"Твоя ставка {amount} капибар принята! Удачи!")
+
+async def countdown(room_code: str):
     for i in range(60, 0, -1):
-        if room_id not in rooms or not rooms[room_id]["active"]:
+        room = rooms.get(room_code)
+        if not room or not room["active"]:
             return
-        if i % 3 == 0:  # Обновлять каждую 3 секунду
-            msg = rooms[room_id]["msg"]
-            try:
-                await msg.edit_text(f"🎲 Комната #{room_id} открыта!\n"
-                                    f"деп: {rooms[room_id]['bet']} капибар\n"
-                                    f"депальщиков: {len(rooms[room_id]['players'])}\n"
-                                    f"⏳ Осталось: {i} сек.")
-            except:
-                pass
+        if i % 5 == 0:  # обновляем каждые 5 сек
+            total_pool = sum(room["players"].values())
+            await safe_edit(
+                room["msg"],
+                f"🎲 Комната {room_code}\n"
+                f"Минимальная ставка: {room['min_bet']} капибар\n"
+                f"🧑‍🤝‍🧑 Участников: {len(room['players'])} (пул: {total_pool})\n"
+                f"⏳ Осталось: {i} сек.\n\n"
+                "Ответь числом, чтобы присоединиться."
+            )
         await asyncio.sleep(1)
 
-    if len(rooms[room_id]["players"]) < 2:
-        await rooms[room_id]["msg"].reply_text("Никто не депнул. Игра отменена.")
-        for uid, amount in rooms[room_id]["players"].items():
-            user = get_user(uid)
-            user["capybaras"] += amount
-            save_user(uid, user)
+    room = rooms.get(room_code)
+    if not room or not room["active"]:
+        return
+
+    if len(room["players"]) < 2:
+        await room["msg"].reply_text("Никто, кроме тебя, не ставил. Деп отменён.")
+        # возвращаем ставки
+        for uid, amt in room["players"].items():
+            u = get_user(uid)
+            u["capybaras"] += amt
+            save_user(uid, u)
     else:
-        await spin_wheel(room_id)
+        await spin_wheel(room_code)
 
-    rooms[room_id]["active"] = False
+    room["active"] = False
 
-import asyncio
-import random
-from db import get_user, save_user
-from telegram.error import RetryAfter
-
-async def safe_edit(msg, text):
-    try:
-        await msg.edit_text(text)
-    except RetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        await msg.edit_text(text)
-    except:
-        pass
-
-async def spin_wheel(room_id):
-    room = rooms[room_id]
+async def spin_wheel(room_code: str):
+    room = rooms[room_code]
     players = list(room["players"].keys())
-    # создаём пул для определения победителя
+    # создаём пул для вероятностей
     pool = []
     for uid, bet in room["players"].items():
-        pool.extend([uid] * bet)
+        pool += [uid] * bet
     winner = random.choice(pool)
     total_pot = sum(room["players"].values())
 
-    # собираем цикл обхода: каждый пользователь поочередно + в конце победитель
-    cycle = players * 3  # три полных круга
-    cycle.append(winner)  # и одна финальная остановка
-
-    for pid in cycle:
-        # формируем текст: кубок над pid, остальные — ниже
+    # анимация кручения
+    sequence = players * 2 + [winner]
+    for pid in sequence:
         cup = f"🏆 @{get_user(pid)['name']}"
-        others = [f"@{get_user(u)['name']}" for u in players if u != pid]
-        text = "🎡 Крутим колесо...\n\n" + cup
+        others = "\n".join(f"@{get_user(u)['name']}" for u in players if u != pid)
+        text = f"🎡 Крутим колесо...\n\n{cup}"
         if others:
-            text += "\n" + "\n".join(others)
-
+            text += "\n" + others
         await safe_edit(room["msg"], text)
-        # пауза короче в начале, подлиннее перед финалом
-        if pid == winner:
-            await asyncio.sleep(2)
-        else:
-            await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3 if pid != winner else 1.5)
 
     # выдача выигрыша
-    user_win = get_user(winner)
-    user_win["capybaras"] += total_pot
-    save_user(winner, user_win)
+    win = get_user(winner)
+    win["capybaras"] += total_pot
+    save_user(winner, win)
+    await room["msg"].reply_text(f"🎉 Победил @{win['name']} и забрал весь пул: {total_pot} капибар!")
 
-    # финальное сообщение
-    await room["msg"].reply_text(
-        f"🎉 Победил @{user_win['name']} и забрал {total_pot} капибар!"
-    )
-
-
+@ensure_registered
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
-    seconds = seconds_until_next_daily(user["last_daily"])
-    timer = format_timer(seconds) if seconds else "доступна!"
+    secs = seconds_until_next_daily(user["last_daily"])
+    timer = format_timer(secs) if secs else "доступна!"
     await update.message.reply_text(
         f"👤 Профиль @{user['name']}\n"
         f"🪙 Капибары: {user['capybaras']}\n"
         f"🎁 Ежедневка: {timer}"
     )
-
-async def safe_edit_text(msg, text):
-    try:
-        await msg.edit_text(text)
-    except RetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        await msg.edit_text(text)
-    except Exception:
-        pass
