@@ -3,7 +3,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from db import add_chat, get_user, save_user, get_all_users
 from utils import ensure_registered, seconds_until_next_daily, format_timer, is_admin
-from config import ADMIN_USERNAME
+from config import ADMIN_ID, ADMIN_USERNAME
 from telegram import InputFile
 from db import get_backup, get_user, save_user, give_capybaras, get_all_chats
 from game import create_room, join_room, show_profile
@@ -58,7 +58,7 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender = update.effective_user
-    if sender.username != ADMIN_USERNAME:
+    if sender.id != ADMIN_ID:
         await update.message.reply_text("❌ Только админ может использовать эту команду.")
         return
 
@@ -73,7 +73,8 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Сумма должна быть числом.")
         return
 
-    from db import find_user_by_username
+    from db import find_user_by_username, give_capybaras
+
     user_id, user = find_user_by_username(username)
     if user is None:
         await update.message.reply_text("Пользователь не найден.")
