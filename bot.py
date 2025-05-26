@@ -3,6 +3,8 @@ from telegram.ext import Application, CommandHandler, filters, MessageHandler
 from config import BOT_TOKEN
 from game import create_room
 from handlers import admin_broadcast, cmd_give, register_handlers, start, daily, top, backup
+from keep_alive import keep_alive
+keep_alive()
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
