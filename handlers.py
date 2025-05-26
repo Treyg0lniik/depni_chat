@@ -1,12 +1,11 @@
 from datetime import datetime
-from telegram import Update
+from telegram import Update, InputFile
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from db import add_chat, get_user, save_user, get_all_users
 from utils import ensure_registered, seconds_until_next_daily, format_timer, is_admin
 from config import ADMIN_USERNAME
-from telegram import InputFile
-from db import get_backup, get_user, save_user, give_capybaras, get_all_chats
-from game import create_room, show_profile
+from db import get_backup, give_capybaras, find_user_by_username, get_all_chats
+from game import create_room, show_profile, handle_reply as game_handle_reply
 
 DAILY_REWARD = 1000
 
@@ -19,7 +18,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         add_chat(update.effective_chat.id, update.effective_chat.title)
 
-    await update.message.reply_text("Добро пожаловать в деп казино! 🎰\n Тут вы можете испытать свою удачу! Скорее пишите /daily и /dap !")
+    await update.message.reply_text(
+        "Добро пожаловать в деп казино! 🎰\n Тут вы можете испытать свою удачу! Скорее пишите /daily и /dap !"
+    )
 
 @ensure_registered
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,9 +54,6 @@ async def backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_profile(update, context)
 
-async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await handle_reply(update, context)
-
 async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender = update.effective_user
     if sender.username != ADMIN_USERNAME:
@@ -72,8 +70,6 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Сумма должна быть числом.")
         return
-
-    from db import find_user_by_username, give_capybaras
 
     user_id, user = find_user_by_username(username)
     if user is None:
@@ -111,6 +107,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("top", top))
     app.add_handler(CommandHandler("backup", backup))
     app.add_handler(CommandHandler("profile", profile))
-    app.add_handler(MessageHandler(filters.TEXT & filters.REPLY, handle_reply))
-
-
+    app.add_handler(CommandHandler("dap", create_room))
+    app.add_handler(MessageHandler(filters.TEXT & filters.REPLY, game_handle_reply))
+    app.add_handler(CommandHandler("give", cmd_give))
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, admin_broadcast))
