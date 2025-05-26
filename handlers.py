@@ -3,10 +3,10 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 from db import add_chat, get_user, save_user, get_all_users
 from utils import ensure_registered, seconds_until_next_daily, format_timer, is_admin
-from config import ADMIN_ID, ADMIN_USERNAME
+from config import ADMIN_USERNAME
 from telegram import InputFile
 from db import get_backup, get_user, save_user, give_capybaras, get_all_chats
-from game import create_room, join_room, show_profile
+from game import create_room, show_profile
 
 DAILY_REWARD = 1000
 
@@ -54,11 +54,11 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_profile(update, context)
 
 async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await join_room(update, context)
+    await handle_reply(update, context)
 
 async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender = update.effective_user
-    if sender.id != ADMIN_ID:
+    if sender.username != ADMIN_USERNAME:
         await update.message.reply_text("❌ Только админ может использовать эту команду.")
         return
 
